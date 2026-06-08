@@ -214,6 +214,19 @@ def load_css():
         text-transform: none !important;
         letter-spacing: 0 !important;
     }
+    /* ── Cache TOUS les cercles radio natifs ── */
+    [data-testid="stSidebar"] .stRadio div[role="radiogroup"] input[type="radio"] {
+        display: none !important;
+    }
+    [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label > div:first-child {
+        display: none !important;
+    }
+    [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label > p {
+        margin: 0 !important;
+    }
+    [data-testid="stSidebar"] span[data-baseweb="radio"] > div:first-child {
+        display: none !important;
+    }
     [data-testid="stSidebar"] hr {
         border-color: rgba(255,255,255,0.15) !important;
     }
@@ -641,22 +654,19 @@ if not st.session_state.logged_in:
     from PIL import Image as PILImage
     import io
 
-    # ── Charger les images pour le slideshow ──
-    img_dir = "images"
+    # ── Charger les images pour le slideshow (racine du projet) ──
     img_b64_list = []
-    if os.path.isdir(img_dir):
-        for fname in sorted(os.listdir(img_dir)):
-            if fname.lower().endswith((".png",".jpg",".jpeg",".webp")) and len(img_b64_list) < 4:
-                try:
-                    path = os.path.join(img_dir, fname)
-                    img = PILImage.open(path).convert("RGB")
-                    img.thumbnail((600, 300), PILImage.LANCZOS)
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=70)
-                    b64 = base64.b64encode(buf.getvalue()).decode()
-                    img_b64_list.append(b64)
-                except:
-                    pass
+    for fname in sorted(os.listdir(".")):
+        if fname.lower().endswith((".png",".jpg",".jpeg",".webp")) and len(img_b64_list) < 4:
+            try:
+                img = PILImage.open(fname).convert("RGB")
+                img.thumbnail((600, 300), PILImage.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=70)
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                img_b64_list.append(b64)
+            except:
+                pass
 
     # Construire les balises <img> du slideshow
     slides_tags = ""
@@ -1417,7 +1427,7 @@ elif role == "Registration & Admin":
                     pre = st.text_input("First Name")
                 with col2:
                     sex = st.selectbox("Gender", ["M", "F"])
-                    age = st.number_input("Age", 5, 30, 15)
+                    age = st.number_input("Age", 5, None, 15)
                     cla = st.selectbox("Class", ["L1", "L2", "L3", "M1", "M2"])
 
                 # Section profil
@@ -1631,7 +1641,7 @@ elif role == "Registration & Admin":
             </style>
             """, unsafe_allow_html=True)
 
-            # ── Bouton natif Streamlit (interactions non possibles en HTML pur) ──
+            # ── Bouton vider tout le flux ──
             if st.button("🧹 Clear feed and reset alerts", type="primary", use_container_width=True):
                 from datetime import datetime
                 st.session_state.last_clear = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1642,11 +1652,11 @@ elif role == "Registration & Admin":
             conn = get_connection()
             if conn:
                 query = f"""
-                    SELECT s.date_saisie, e.matricule, e.nom, e.prenom, e.classe, s.matiere, s.note, s.nom_enseignant 
+                    SELECT s.id, s.date_saisie, e.matricule, e.nom, e.prenom, e.classe, s.matiere, s.note, s.nom_enseignant 
                     FROM suivi s 
                     JOIN eleves e ON s.matricule_eleve = e.matricule 
                     WHERE s.date_saisie > '{st.session_state.last_clear}'
-                    ORDER BY s.date_saisie DESC
+                    ORDER BY e.classe ASC, s.date_saisie DESC
                 """
                 df_notif = db_read_sql(query, conn)
                 conn.close()
@@ -1656,7 +1666,7 @@ elif role == "Registration & Admin":
                     nb_alert = int((df_notif['note'] < 10).sum())
                     nb_ok    = nb - nb_alert
 
-                    # ── BLOC HEADER ──
+                    # ── BLOC HEADER GLOBAL ──
                     st.markdown(f"""
                     <div class="flux-header">
                         <div class="flux-header-left">
@@ -1672,12 +1682,62 @@ elif role == "Registration & Admin":
                     </div>
                     """, unsafe_allow_html=True)
 
-                    # ── BLOCS CARTES (par lots de 5 pour rester sous la limite) ──
-                    rows = list(df_notif.iterrows())
-                    for chunk_start in range(0, len(rows), 5):
-                        chunk = rows[chunk_start:chunk_start + 5]
-                        cards_html = ""
-                        for idx, row in chunk:
+                    # ── CSS groupes par classe ──
+                    st.markdown("""
+                    <style>
+                    .classe-group-header {
+                        display: flex; align-items: center; justify-content: space-between;
+                        background: linear-gradient(135deg, #064E3B, #065F46);
+                        border-radius: 12px; padding: 12px 18px; margin: 18px 0 10px 0;
+                    }
+                    .classe-group-title {
+                        font-size: 0.95rem; font-weight: 800; color: #fff;
+                        display: flex; align-items: center; gap: 8px;
+                    }
+                    .classe-group-count {
+                        background: rgba(255,255,255,0.15); border-radius: 99px;
+                        padding: 3px 12px; font-size: 0.78rem; font-weight: 700; color: #6EE7B7;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+
+                    # ── GROUPEMENT PAR CLASSE ──
+                    classes_Presentes = df_notif['classe'].unique()
+
+                    for classe in classes_Presentes:
+                        df_classe = df_notif[df_notif['classe'] == classe]
+                        nb_classe = len(df_classe)
+                        nb_alerte_classe = int((df_classe['note'] < 10).sum())
+
+                        # Header du groupe avec bouton supprimer toute la classe
+                        col_titre, col_btn = st.columns([4, 1])
+                        with col_titre:
+                            st.markdown(f"""
+                            <div class="classe-group-header">
+                                <div class="classe-group-title">🏫 Class {classe}</div>
+                                <div class="classe-group-count">
+                                    {nb_classe} notification(s) · 🔴 {nb_alerte_classe} alert(s)
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        with col_btn:
+                            st.write("")
+                            st.write("")
+                            if st.button(f"🗑️ Delete all · {classe}", key=f"del_classe_{classe}", use_container_width=True):
+                                ids_classe = df_classe['id'].tolist()
+                                conn2 = get_connection()
+                                if conn2:
+                                    cursor2 = get_cursor(conn2)
+                                    for sid in ids_classe:
+                                        db_execute(cursor2, "DELETE FROM suivi WHERE id = %s", (int(sid),))
+                                    conn2.commit()
+                                    conn2.close()
+                                marquer_comme_lu()
+                                st.success(f"All notifications for class {classe} deleted!")
+                                st.rerun()
+
+                        # Cartes de la classe avec bouton supprimer individuel
+                        for idx, row in df_classe.iterrows():
                             prof       = row['nom_enseignant'] if row['nom_enseignant'] else "Teacher"
                             note       = row['note']
                             is_alerte  = note < 10
@@ -1685,21 +1745,34 @@ elif role == "Registration & Admin":
                             icon       = "⚠️" if is_alerte else "✅"
                             note_class = "flux-note-bad" if is_alerte else "flux-note-ok"
                             date_str   = str(row['date_saisie'])[:16] if row['date_saisie'] else ""
-                            cards_html += f"""
-                            <div class="{card_class}">
-                                <div class="flux-card-icon">{icon}</div>
-                                <div class="flux-card-body">
-                                    <div class="flux-card-name">{row['nom']} {row['prenom']}</div>
-                                    <div class="flux-card-detail">
-                                        {row['classe']} &nbsp;·&nbsp; {row['matiere']} &nbsp;·&nbsp; {prof}
+                            notif_id   = int(row['id'])
+
+                            col_card, col_del = st.columns([10, 1])
+                            with col_card:
+                                st.markdown(f"""
+                                <div class="{card_class}">
+                                    <div class="flux-card-icon">{icon}</div>
+                                    <div class="flux-card-body">
+                                        <div class="flux-card-name">{row['nom']} {row['prenom']}</div>
+                                        <div class="flux-card-detail">
+                                            {row['classe']} &nbsp;·&nbsp; {row['matiere']} &nbsp;·&nbsp; {prof}
+                                        </div>
                                     </div>
-                                </div>
-                                <div class="flux-card-right">
-                                    <div class="{note_class}">{note}/20</div>
-                                    <div class="flux-time">{date_str}</div>
-                                </div>
-                            </div>"""
-                        st.markdown(cards_html, unsafe_allow_html=True)
+                                    <div class="flux-card-right">
+                                        <div class="{note_class}">{note}/20</div>
+                                        <div class="flux-time">{date_str}</div>
+                                    </div>
+                                </div>""", unsafe_allow_html=True)
+                            with col_del:
+                                if st.button("✕", key=f"del_notif_{notif_id}", help="Delete this notification"):
+                                    conn3 = get_connection()
+                                    if conn3:
+                                        cursor3 = get_cursor(conn3)
+                                        db_execute(cursor3, "DELETE FROM suivi WHERE id = %s", (notif_id,))
+                                        conn3.commit()
+                                        conn3.close()
+                                    marquer_comme_lu()
+                                    st.rerun()
 
                 else:
                     # ── ÉTAT VIDE ──
@@ -2342,6 +2415,9 @@ elif "Counselor & Monitoring" in role:
         else:
             st.info("🔒 Please enter your access code to continue.")
         st.stop()
+
+    # ── Badge supprimé définitivement dès l'accès à la page ──
+    marquer_comme_lu()
 
     # CSS Conseiller — partie 1 : header + filtre
     st.markdown("""
